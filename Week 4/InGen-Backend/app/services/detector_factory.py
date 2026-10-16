@@ -1,4 +1,4 @@
-#Create appropriate detector model depending on settings in core/config.py
+# Create appropriate detector model depending on settings in core/config.py
 from app.core.config import settings
 from app.services.detector import Detector
 from app.services.stub_detector import StubDetector
@@ -14,6 +14,4 @@ def create_detector() -> Detector:
             model_name=settings.yolo_model,
         )
 
-    raise ValueError(
-        f"Unsupported detector backend: {settings.detector_backend}"
-    )
+    raise ValueError(f"Unsupported detector backend: {settings.detector_backend}")

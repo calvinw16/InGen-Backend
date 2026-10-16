@@ -1,6 +1,7 @@
+from typing import Any, cast
 from uuid import uuid4
 
-from PIL.Image import Image
+from PIL import Image
 from ultralytics import YOLO
 
 from app.models.perception import BoundingBox, Detection
@@ -13,8 +14,9 @@ class YoloDetector:
 
     def load(self) -> None:
         self.model = YOLO(self.model_name)
-    #To account for slower inference initially due to initializing internal resources
-    #Or allocating memory
+
+    # To account for slower inference initially due to initializing internal resources
+    # Or allocating memory
     def warm_up(self) -> None:
         if self.model is None:
             raise RuntimeError("Detector must be loaded before warm-up.")
@@ -30,20 +32,25 @@ class YoloDetector:
             verbose=False,
         )
 
-    def predict(self, image: Image) -> list[Detection]:
+    def predict(self, image: Image.Image) -> list[Detection]:
         if self.model is None:
             raise RuntimeError("Detector is not loaded.")
 
-        results = self.model.predict(
+        results = cast(
+            list[Any],
+            self.model.predict(
             source=image,
             verbose=False,
-        )
+        ))
 
         detections: list[Detection] = []
 
         for result in results:
             image_height, image_width = result.orig_shape
 
+            if result.boxes is None:
+                continue
+            
             for box in result.boxes:
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
 
@@ -53,7 +60,7 @@ class YoloDetector:
                 detections.append(
                     Detection(
                         id=str(uuid4()),
-                        frame_id="pending", #Change to recieve a frame ID or attach the frame ID after inference in a service layer
+                        frame_id="pending",  # Change to recieve a frame ID or attach the frame ID after inference in a service layer
                         class_label=result.names[class_id],
                         confidence=confidence,
                         bbox=BoundingBox(

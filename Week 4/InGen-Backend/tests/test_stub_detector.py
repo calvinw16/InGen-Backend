@@ -3,6 +3,7 @@ from PIL import Image
 
 from app.services.stub_detector import StubDetector
 
+
 # TEST to ensure load model is required
 def test_stub_detector_requires_load():
     detector = StubDetector()
@@ -12,7 +13,7 @@ def test_stub_detector_requires_load():
         (640, 480),
         "white",
     )
-    #Check that expected exception occurs
+    # Check that expected exception occurs
     with pytest.raises(RuntimeError):
         detector.predict(image)
 
@@ -34,6 +35,7 @@ def test_stub_detector_returns_deterministic_detection():
     assert len(detections) == 1
     assert detections[0].class_label == "person"
     assert detections[0].confidence == 0.95
+
 
 # TEST inference model properly unloads
 def test_stub_detector_unload():

@@ -1,5 +1,5 @@
-#Stub detector to confirm API calls and communication
-#Returns same prediction every time
+# Stub detector to confirm API calls and communication
+# Returns same prediction every time
 from PIL.Image import Image
 
 from app.models.perception import BoundingBox, Detection

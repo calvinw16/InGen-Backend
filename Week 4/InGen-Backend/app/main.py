@@ -1,4 +1,5 @@
 import uuid
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,11 +9,28 @@ from fastapi.responses import JSONResponse
 from app.api.health import router as health_router
 from app.api.v1 import router as v1_router
 from app.core.logging import configure_logging
+from app.core.runtime import worker
 from app.models.perception import ErrorResponse
+from app.services.detector_factory import create_detector
+
+# Create object detector and worker that manages the detector
+# On startup of FastAPI backend
+detector = create_detector()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await worker.start()
+
+    yield
+
+    await worker.stop()
+
 
 # App is main backend application object
 app = FastAPI(
     title="Aido Backend Service",
+    lifespan=lifespan,
     version="0.1.0",
 )
 

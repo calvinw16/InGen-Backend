@@ -1,5 +1,5 @@
-#use protocol to define an interface that other classes can follow
-#Allows for YOLO model to be swappable to any detection model to be used as type detector
+# use protocol to define an interface that other classes can follow
+# Allows for YOLO model to be swappable to any detection model to be used as type detector
 from typing import Protocol
 
 from PIL.Image import Image

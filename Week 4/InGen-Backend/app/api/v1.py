@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
 
+from app.core.runtime import worker
 from app.models.perception import (
     DetectionFilters,
     DetectionListResponse,
@@ -20,15 +21,24 @@ from app.models.perception import (
     FrameResponse,
     RobotState,
 )
+from app.services.frame_store import (
+    get_frame as get_frame_record,
+)
+from app.services.frame_store import (
+    mark_completed,
+    mark_failed,
+    save_frame,
+)
+from app.workers.detection_worker import (
+    QueueFullError,
+    WorkerNotReadyError,
+)
+from app.workers.models import InferenceJob
 
-# Use APIRouter to separate endpoints and create modularity
-
+# API router
 router = APIRouter(prefix="/v1", tags=["Perception"])
 
-# Temporary storage for development phase
-# Not implementation of PostgreSQL
-frames: dict[str, FrameDetailResponse] = {}
-
+# Maximum accepted image size: 2 MiB
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 
 
@@ -39,30 +49,42 @@ def api_error(
 ) -> NoReturn:
     raise HTTPException(
         status_code=status_code,
-        detail={"code": code, "message": message},
+        detail={
+            "code": code,
+            "message": message,
+        },
     )
 
 
 @router.post(
-    "/frames",  # URL path where the request is sent
+    "/frames",
     response_model=FrameResponse,
-    status_code=status.HTTP_202_ACCEPTED,  # Sets default succesful status code
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Submit a frame for inference",
     description=(
-        "Accepts a base64-encoded JPEG frame and creates a "
-        "temporary processing record. Worker dispatch is not "
-        "implemented in this initial version."
+        "Accepts a base64-encoded JPEG frame, validates "
+        "the image, saves a temporary frame record, and "
+        "queues the frame for asynchronous inference."
     ),
     responses={
         413: {
             "model": ErrorResponse,
             "description": "Image exceeds 2 MiB",
         },
-        422: {"description": "Invalid request payload"},
+        422: {
+            "description": "Invalid request payload",
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "Inference worker unavailable or queue full",
+        },
     },
 )
-def submit_frame(payload: FrameRequest) -> FrameResponse:
-    # 1. Check the encoded payload length before decoding.
+async def submit_frame(
+    payload: FrameRequest,
+) -> FrameResponse:
+
+    # 1. Check encoded payload length before decoding.
     max_base64_chars = 4 * ((MAX_FRAME_BYTES + 2) // 3)
 
     if len(payload.image_base64) > max_base64_chars:
@@ -72,12 +94,13 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
             "Frame exceeds the 2 MiB limit.",
         )
 
-    # 2. Convert base64 text into image bytes.
+    # 2. Decode base64 image.
     try:
         image_bytes = base64.b64decode(
             payload.image_base64,
             validate=True,
         )
+
     except (binascii.Error, ValueError):
         api_error(
             422,
@@ -92,9 +115,10 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
             "Frame exceeds the 2 MiB limit.",
         )
 
-    # 3. Read the image's actual dimensions.
+    # 3. Validate image format and decode JPEG.
     try:
         with Image.open(BytesIO(image_bytes)) as image:
+
             if image.format != "JPEG":
                 api_error(
                     422,
@@ -104,8 +128,11 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
 
             width, height = image.size
 
-            # Force Pillow to decode the image.
+            # Force Pillow to decode image data.
             image.load()
+
+            # Preserve image after the file is closed.
+            decoded_image = image.copy()
 
     except (UnidentifiedImageError, OSError, ValueError):
         api_error(
@@ -114,15 +141,15 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
             "Image could not be decoded.",
         )
 
-    # 4. Generate server-side metadata.
-
+    # 4. Generate frame metadata.
     frame_id = str(uuid4())
     job_id = str(uuid4())
+
     received_at = datetime.now(UTC)
+
     checksum = hashlib.sha256(image_bytes).hexdigest()
 
-    # 5. Construct a complete Pydantic Frame.
-    # All Frame validators run automatically here.
+    # 5. Construct validated Frame model.
     try:
         frame = Frame(
             id=frame_id,
@@ -136,6 +163,7 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
             size_bytes=len(image_bytes),
             checksum=checksum,
         )
+
     except ValidationError:
         api_error(
             422,
@@ -143,16 +171,54 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
             "Frame metadata failed validation.",
         )
 
-    # 6. Store a temporary frame record.
-    # No inference worker is connected yet.
-    frames[frame_id] = FrameDetailResponse(
+    # 6. Create frame record.
+    record = FrameDetailResponse(
         frame=frame,
         job_id=job_id,
         status="accepted",
         detections=[],
     )
 
-    # 7. Return the documented response.
+    # 7. Create inference job with callbacks.
+    job = InferenceJob(
+        frame_id=frame_id,
+        image=decoded_image,
+        on_completed=mark_completed,
+        on_failed=mark_failed,
+    )
+
+    # 8. Save frame record before submitting inference.
+    save_frame(frame_id, record)
+
+    # 9. Enqueue inference job.
+    try:
+        await worker.enqueue(job)
+
+    except WorkerNotReadyError:
+        await mark_failed(
+            frame_id,
+            "WORKER_NOT_READY",
+        )
+
+        api_error(
+            503,
+            "WORKER_NOT_READY",
+            "Inference worker is not ready.",
+        )
+
+    except QueueFullError:
+        await mark_failed(
+            frame_id,
+            "QUEUE_FULL",
+        )
+
+        api_error(
+            503,
+            "QUEUE_FULL",
+            "Inference queue is full.",
+        )
+
+    # 10. Return immediately after successful enqueue.
     return FrameResponse(
         frame_id=frame_id,
         robot_id=frame.robot_id,
@@ -167,10 +233,18 @@ def submit_frame(payload: FrameRequest) -> FrameResponse:
     "/frames/{frame_id}",
     response_model=FrameDetailResponse,
     summary="Retrieve frame information",
-    responses={404: {"model": ErrorResponse}},
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "Frame not found",
+        },
+    },
 )
-def get_frame(frame_id: str) -> FrameDetailResponse:
-    record = frames.get(frame_id)
+def get_frame(
+    frame_id: str,
+) -> FrameDetailResponse:
+
+    record = get_frame_record(frame_id)
 
     if record is None:
         api_error(
@@ -187,7 +261,10 @@ def get_frame(frame_id: str) -> FrameDetailResponse:
     response_model=RobotState,
     summary="Retrieve a robot's current state",
 )
-def get_robot_state(robot_id: str) -> RobotState:
+def get_robot_state(
+    robot_id: str,
+) -> RobotState:
+
     return RobotState(
         robot_id=robot_id,
         state="unknown",
@@ -201,9 +278,13 @@ def get_robot_state(robot_id: str) -> RobotState:
     summary="List detection records",
 )
 def list_detections(
-    filters: Annotated[DetectionFilters, Depends()],
+    filters: Annotated[
+        DetectionFilters,
+        Depends(),
+    ],
 ) -> DetectionListResponse:
-    # Detection storage is not implemented yet.
+
+    # Detection listing is not implemented yet.
     return DetectionListResponse(
         items=[],
         count=0,

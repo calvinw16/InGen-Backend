@@ -2,12 +2,7 @@ import base64
 from datetime import UTC, datetime
 from io import BytesIO
 
-from fastapi.testclient import TestClient
 from PIL import Image
-
-from app.main import app
-
-client = TestClient(app)
 
 
 def create_test_image() -> str:
@@ -18,7 +13,7 @@ def create_test_image() -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def test_submit_frame():
+def test_submit_frame(client):
     payload = {
         "robot_id": "aido_001",
         "platform": "aido",
@@ -50,7 +45,7 @@ def test_submit_frame():
     assert len(metadata["checksum"]) == 64
 
 
-def test_frame_not_found():
+def test_frame_not_found(client):
     response = client.get("/v1/frames/nonexistent-frame")
 
     assert response.status_code == 404
@@ -63,7 +58,7 @@ def test_frame_not_found():
     assert "details" in error
 
 
-def test_invalid_image():
+def test_invalid_image(client):
     response = client.post(
         "/v1/frames",
         json={
@@ -78,7 +73,7 @@ def test_invalid_image():
     assert response.json()["code"] == "INVALID_IMAGE"
 
 
-def test_missing_required_field():
+def test_missing_required_field(client):
     response = client.post(
         "/v1/frames",
         json={
@@ -93,12 +88,12 @@ def test_missing_required_field():
 
 
 # Now test the case the frame is non existent
-def test_missing_frame():
+def test_missing_frame(client):
     response = client.get("/v1/frames/nonexistent")
     assert response.status_code == 404
 
 
-def test_robot_state():
+def test_robot_state(client):
     response = client.get("/v1/robots/aido_001/state")
 
     assert response.status_code == 200
@@ -106,7 +101,7 @@ def test_robot_state():
     assert response.json()["source"] == "stub"
 
 
-def test_detections():
+def test_detections(client):
     response = client.get("/v1/detections?robot_id=aido_001&limit=10")
 
     assert response.status_code == 200
@@ -114,7 +109,7 @@ def test_detections():
 
 
 # Test if an invalid frame is passed in
-def test_invalid_frame():
+def test_invalid_frame(client):
     response = client.post(
         "/v1/frames",
         json={
@@ -127,7 +122,7 @@ def test_invalid_frame():
     assert response.status_code == 422
 
 
-def test_empty_frame():
+def test_empty_frame(client):
     response = client.post("/v1/frames", json={"image_base64": ""})
 
     assert response.status_code == 422
