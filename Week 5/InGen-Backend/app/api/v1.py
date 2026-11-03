@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import Annotated, NoReturn
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
@@ -23,6 +23,7 @@ from app.models.perception import (
     FrameRequest,
     FrameResponse,
     RobotState,
+    RobotStateHistory,
 )
 from app.services.frame_store import (
     get_frame as get_frame_record,
@@ -32,6 +33,7 @@ from app.services.frame_store import (
     mark_failed,
     save_frame,
 )
+from app.services.robot_state import robot_states
 from app.workers.detection_worker import (
     QueueFullError,
     WorkerNotReadyError,
@@ -286,11 +288,16 @@ def get_robot_state(
     robot_id: str,
 ) -> RobotState:
 
-    return RobotState(
-        robot_id=robot_id,
-        state="unknown",
-        source="stub",
-    )
+    return robot_states.get(robot_id)
+
+
+@router.get("/robots/{robot_id}/state/history", response_model=RobotStateHistory)
+def get_robot_state_history(
+    robot_id: str,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 20,
+) -> RobotStateHistory:
+    items = robot_states.history(robot_id, limit)
+    return RobotStateHistory(robot_id=robot_id, items=items, count=len(items))
 
 
 @router.get(

@@ -74,6 +74,13 @@ class DetectionWorker:
             finally:
                 self.queue.task_done()
 
+    def _predict_and_release(self, job: InferenceJob):
+        try:
+            return self.detector.predict(job.image)
+        finally:
+            # Release in the inference thread, even if the async waiter times out.
+            job.image.close()
+
     async def _process_job(
         self,
         job: InferenceJob,
@@ -84,8 +91,8 @@ class DetectionWorker:
                 job.timings["queue_ms"] = (started - job.enqueued_at) * 1000
             detections = await asyncio.wait_for(
                 asyncio.to_thread(
-                    self.detector.predict,
-                    job.image,
+                    self._predict_and_release,
+                    job,
                 ),
                 timeout=settings.inference_timeout_seconds,
             )

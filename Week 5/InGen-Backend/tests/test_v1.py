@@ -97,8 +97,11 @@ def test_robot_state(client):
     response = client.get("/v1/robots/aido_001/state")
 
     assert response.status_code == 200
-    assert response.json()["state"] == "unknown"
-    assert response.json()["source"] == "stub"
+    body = response.json()
+    assert body["robot_id"] == "aido_001"
+    assert "entities" in body
+    assert "entity_count_by_class" in body
+    assert "state_version" in body
 
 
 def test_detections(client):

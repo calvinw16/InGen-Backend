@@ -86,6 +86,7 @@ class FrameResponse(BaseModel):
 
 
 class FrameDetailResponse(BaseModel):
+    _expires_at: datetime | None = PrivateAttr(default=None)
     _timings: dict[str, float] = PrivateAttr(default_factory=dict)
 
     frame: Frame
@@ -94,10 +95,30 @@ class FrameDetailResponse(BaseModel):
     detections: list[Detection] = Field(default_factory=list)
 
 
+class TrackedEntity(BaseModel):
+    entity_id: str
+    class_label: str = Field(min_length=1)
+    last_seen: datetime
+    position: BoundingBox
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    observation_count: int = Field(ge=1)
+    stale: bool = False
+
+
 class RobotState(BaseModel):
     robot_id: str
-    state: str
-    source: Literal["stub", "robot"]
+    platform: str = "unknown"
+    entities: list[TrackedEntity] = Field(default_factory=list)
+    entity_count_by_class: dict[str, int] = Field(default_factory=dict)
+    most_recent_frame_id: str | None = None
+    state_version: int = Field(default=0, ge=0)
+    updated_at: datetime | None = None
+
+
+class RobotStateHistory(BaseModel):
+    robot_id: str
+    items: list[RobotState] = Field(default_factory=list)
+    count: int = 0
 
 
 class DetectionFilters(BaseModel):
